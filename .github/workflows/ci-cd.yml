@@ -79,13 +79,16 @@ jobs:
     needs: [build]
     env:
       REGISTRY: ghcr.io
-      # Convert repository name to lowercase to ensure a valid Docker image name.
-      IMAGE_NAME: ${{ toLower(github.repository) }}
     outputs:
       image_tag: ${{ steps.set_output.outputs.image_tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # Convert repository name to lowercase using a shell command
+      - name: Set lowercase image name
+        id: lower
+        run: echo "image_name=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
       
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -107,7 +110,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }}
           tags: |
             type=sha,format=long
             type=ref,event=branch
@@ -128,8 +131,7 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          # Make sure this tag matches one of the tags from your metadata output.
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          image-ref: ${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }}:sha-${{ github.sha }}
           format: 'table'
           exit-code: '0'
           ignore-unfixed: true
@@ -159,6 +161,11 @@ jobs:
         with:
           token: ${{ secrets.TOKEN }}
       
+      # Convert repository name to lowercase in this job as well
+      - name: Set lowercase repository name
+        id: lower
+        run: echo "repo_name=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      
       - name: Setup Git config
         run: |
           git config user.name "GitHub Actions"
@@ -167,15 +174,12 @@ jobs:
       - name: Update Kubernetes deployment file
         env:
           IMAGE_TAG: sha-${{ github.sha }}
-          GITHUB_REPOSITORY: ${{ toLower(github.repository) }}
           REGISTRY: ghcr.io
         run: |
-          # Define the new image with tag
-          NEW_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}"
-          
+          # Define the new image with tag using the lowercased repository name from the previous step
+          NEW_IMAGE="${REGISTRY}/${{ steps.lower.outputs.repo_name }}:${IMAGE_TAG}"
           # Update the deployment file directly
           sed -i "s|image: ${REGISTRY}/.*|image: ${NEW_IMAGE}|g" kubernetes/deployment.yaml
-          
           # Verify the change
           echo "Updated deployment to use image: ${NEW_IMAGE}"
           grep -A 1 "image:" kubernetes/deployment.yaml
